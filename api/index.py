@@ -1,28 +1,43 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import json
 import statistics
-import os
+from typing import List
 
-# Load telemetry data from file
+app = FastAPI()
+
+# Enable CORS for all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Load telemetry data
 def load_telemetry():
     try:
-        # Try multiple possible paths for Vercel deployment
-        possible_paths = [
-            'q-vercel-latency.json',
-            '../q-vercel-latency.json',
-            '/var/task/q-vercel-latency.json',
-            os.path.join(os.path.dirname(__file__), '../q-vercel-latency.json'),
-        ]
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                with open(path, 'r') as f:
-                    return json.load(f)
-        return {}
+        with open('q-vercel-latency.json', 'r') as f:
+            return json.load(f)
     except Exception as e:
         print(f"Error loading telemetry: {e}")
         return {}
 
 TELEMETRY_DATA = load_telemetry()
+
+# Request model
+class LatencyRequest(BaseModel):
+    regions: List[str]
+    threshold_ms: int = 180
+
+# Response model
+class RegionMetrics(BaseModel):
+    avg_latency: float
+    p95_latency: float
+    avg_uptime: float
+    breaches: int
 
 def calculate_percentile(values, percentile):
     """Calculate the nth percentile of a list of values"""
@@ -42,87 +57,38 @@ def calculate_percentile(values, percentile):
 def analyze_region(region_data, threshold_ms):
     """Analyze latency data for a single region"""
     if not region_data:
-        return {
-            "avg_latency": 0,
-            "p95_latency": 0,
-            "avg_uptime": 0,
-            "breaches": 0
-        }
+        return RegionMetrics(
+            avg_latency=0,
+            p95_latency=0,
+            avg_uptime=0,
+            breaches=0
+        )
     
     latencies = [record["latency_ms"] for record in region_data]
     uptimes = [record["uptime"] for record in region_data]
     
-    return {
-        "avg_latency": round(statistics.mean(latencies), 2),
-        "p95_latency": round(calculate_percentile(latencies, 95), 2),
-        "avg_uptime": round(statistics.mean(uptimes), 4),
-        "breaches": sum(1 for lat in latencies if lat > threshold_ms)
-    }
+    return RegionMetrics(
+        avg_latency=round(statistics.mean(latencies), 2),
+        p95_latency=round(calculate_percentile(latencies, 95), 2),
+        avg_uptime=round(statistics.mean(uptimes), 4),
+        breaches=sum(1 for lat in latencies if lat > threshold_ms)
+    )
 
-def handler(event, context):
-    """Main handler function for Vercel serverless"""
+@app.post("/api")
+async def analyze_latency(request: LatencyRequest):
+    """Analyze latency metrics for specified regions"""
+    response = {}
     
-    # CORS headers for all responses
-    cors_headers = {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Content-Type': 'application/json'
-    }
-    
-    # Handle CORS preflight
-    if event.get('httpMethod') == 'OPTIONS' or event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
-        return {
-            'statusCode': 200,
-            'headers': cors_headers,
-            'body': ''
-        }
-    
-    # Only handle POST requests
-    method = event.get('httpMethod') or event.get('requestContext', {}).get('http', {}).get('method')
-    if method != 'POST':
-        return {
-            'statusCode': 405,
-            'headers': cors_headers,
-            'body': json.dumps({'error': 'Method not allowed'})
-        }
-    
-    try:
-        # Parse request body
-        body = event.get('body', '{}')
-        if isinstance(body, str):
-            request_data = json.loads(body)
+    for region in request.regions:
+        if region in TELEMETRY_DATA:
+            metrics = analyze_region(TELEMETRY_DATA[region], request.threshold_ms)
+            response[region] = metrics.dict()
         else:
-            request_data = body
-        
-        regions = request_data.get('regions', [])
-        threshold_ms = request_data.get('threshold_ms', 180)
-        
-        # Calculate metrics for each region
-        response = {}
-        for region in regions:
-            if region in TELEMETRY_DATA:
-                response[region] = analyze_region(
-                    TELEMETRY_DATA[region], 
-                    threshold_ms
-                )
-            else:
-                response[region] = {
-                    "avg_latency": 0,
-                    "p95_latency": 0,
-                    "avg_uptime": 0,
-                    "breaches": 0
-                }
-        
-        return {
-            'statusCode': 200,
-            'headers': cors_headers,
-            'body': json.dumps(response)
-        }
-        
-    except Exception as e:
-        return {
-            'statusCode': 500,
-            'headers': cors_headers,
-            'body': json.dumps({'error': str(e)})
-        }
+            response[region] = RegionMetrics(
+                avg_latency=0,
+                p95_latency=0,
+                avg_uptime=0,
+                breaches=0
+            ).dict()
+    
+    return response
