@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from mangum import Mangum
 import json
 import statistics
 from typing import List, Dict
@@ -16,7 +15,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # Load telemetry data
 def load_telemetry():
@@ -87,5 +85,11 @@ async def analyze_latency(request: LatencyRequest):
     
     return response
 
-# Vercel serverless handler
-handler = Mangum(app)
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {"status": "ok", "regions_loaded": len(TELEMETRY_DATA)}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
