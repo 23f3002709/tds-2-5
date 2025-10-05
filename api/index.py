@@ -62,15 +62,19 @@ def analyze_region(region_data, threshold_ms):
 def handler(event, context):
     """Main handler function for Vercel serverless"""
     
+    # CORS headers for all responses
+    cors_headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Content-Type': 'application/json'
+    }
+    
     # Handle CORS preflight
     if event.get('httpMethod') == 'OPTIONS' or event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
         return {
             'statusCode': 200,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type',
-            },
+            'headers': cors_headers,
             'body': ''
         }
     
@@ -79,10 +83,7 @@ def handler(event, context):
     if method != 'POST':
         return {
             'statusCode': 405,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers,
             'body': json.dumps({'error': 'Method not allowed'})
         }
     
@@ -115,19 +116,13 @@ def handler(event, context):
         
         return {
             'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers,
             'body': json.dumps(response)
         }
         
     except Exception as e:
         return {
             'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers,
             'body': json.dumps({'error': str(e)})
         }
