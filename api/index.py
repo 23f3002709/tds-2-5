@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import json
 import statistics
 from typing import List, Dict
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
@@ -66,6 +67,16 @@ def analyze_region(region_data, threshold_ms) -> Dict:
         "avg_uptime": round(statistics.mean(uptimes), 4),
         "breaches": sum(1 for lat in latencies if lat > threshold_ms)
     }
+
+
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(rest_of_path: str, request: Request):
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+    return JSONResponse(content={}, headers=headers)
 
 @app.post("/api")
 async def analyze_latency(request: LatencyRequest):
