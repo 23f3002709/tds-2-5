@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from mangum import Mangum
 import json
 import statistics
-from typing import List
+from typing import List, Dict
 
 app = FastAPI()
 
@@ -32,13 +33,6 @@ class LatencyRequest(BaseModel):
     regions: List[str]
     threshold_ms: int = 180
 
-# Response model
-class RegionMetrics(BaseModel):
-    avg_latency: float
-    p95_latency: float
-    avg_uptime: float
-    breaches: int
-
 def calculate_percentile(values, percentile):
     """Calculate the nth percentile of a list of values"""
     if not values:
@@ -54,25 +48,25 @@ def calculate_percentile(values, percentile):
     
     return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
 
-def analyze_region(region_data, threshold_ms):
+def analyze_region(region_data, threshold_ms) -> Dict:
     """Analyze latency data for a single region"""
     if not region_data:
-        return RegionMetrics(
-            avg_latency=0,
-            p95_latency=0,
-            avg_uptime=0,
-            breaches=0
-        )
+        return {
+            "avg_latency": 0,
+            "p95_latency": 0,
+            "avg_uptime": 0,
+            "breaches": 0
+        }
     
     latencies = [record["latency_ms"] for record in region_data]
     uptimes = [record["uptime"] for record in region_data]
     
-    return RegionMetrics(
-        avg_latency=round(statistics.mean(latencies), 2),
-        p95_latency=round(calculate_percentile(latencies, 95), 2),
-        avg_uptime=round(statistics.mean(uptimes), 4),
-        breaches=sum(1 for lat in latencies if lat > threshold_ms)
-    )
+    return {
+        "avg_latency": round(statistics.mean(latencies), 2),
+        "p95_latency": round(calculate_percentile(latencies, 95), 2),
+        "avg_uptime": round(statistics.mean(uptimes), 4),
+        "breaches": sum(1 for lat in latencies if lat > threshold_ms)
+    }
 
 @app.post("/api")
 async def analyze_latency(request: LatencyRequest):
@@ -81,14 +75,16 @@ async def analyze_latency(request: LatencyRequest):
     
     for region in request.regions:
         if region in TELEMETRY_DATA:
-            metrics = analyze_region(TELEMETRY_DATA[region], request.threshold_ms)
-            response[region] = metrics.dict()
+            response[region] = analyze_region(TELEMETRY_DATA[region], request.threshold_ms)
         else:
-            response[region] = RegionMetrics(
-                avg_latency=0,
-                p95_latency=0,
-                avg_uptime=0,
-                breaches=0
-            ).dict()
+            response[region] = {
+                "avg_latency": 0,
+                "p95_latency": 0,
+                "avg_uptime": 0,
+                "breaches": 0
+            }
     
     return response
+
+# Vercel serverless handler
+handler = Mangum(app)
