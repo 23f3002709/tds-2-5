@@ -1,13 +1,25 @@
-from http.server import BaseHTTPRequestHandler
 import json
 import statistics
+import os
 
 # Load telemetry data from file
 def load_telemetry():
     try:
-        with open('q-vercel-latency.json', 'r') as f:
-            return json.load(f)
-    except:
+        # Try multiple possible paths for Vercel deployment
+        possible_paths = [
+            'q-vercel-latency.json',
+            '../q-vercel-latency.json',
+            '/var/task/q-vercel-latency.json',
+            os.path.join(os.path.dirname(__file__), '../q-vercel-latency.json'),
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    return json.load(f)
+        return {}
+    except Exception as e:
+        print(f"Error loading telemetry: {e}")
         return {}
 
 TELEMETRY_DATA = load_telemetry()
@@ -47,51 +59,75 @@ def analyze_region(region_data, threshold_ms):
         "breaches": sum(1 for lat in latencies if lat > threshold_ms)
     }
 
-class handler(BaseHTTPRequestHandler):
-    def do_OPTIONS(self):
-        """Handle CORS preflight requests"""
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
+def handler(event, context):
+    """Main handler function for Vercel serverless"""
     
-    def do_POST(self):
-        """Handle POST requests for latency analysis"""
-        # Enable CORS
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        
-        try:
-            # Parse request body
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length)
+    # Handle CORS preflight
+    if event.get('httpMethod') == 'OPTIONS' or event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+            },
+            'body': ''
+        }
+    
+    # Only handle POST requests
+    method = event.get('httpMethod') or event.get('requestContext', {}).get('http', {}).get('method')
+    if method != 'POST':
+        return {
+            'statusCode': 405,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+            },
+            'body': json.dumps({'error': 'Method not allowed'})
+        }
+    
+    try:
+        # Parse request body
+        body = event.get('body', '{}')
+        if isinstance(body, str):
             request_data = json.loads(body)
-            
-            regions = request_data.get('regions', [])
-            threshold_ms = request_data.get('threshold_ms', 180)
-            
-            # Calculate metrics for each region
-            response = {}
-            for region in regions:
-                if region in TELEMETRY_DATA:
-                    response[region] = analyze_region(
-                        TELEMETRY_DATA[region], 
-                        threshold_ms
-                    )
-                else:
-                    response[region] = {
-                        "avg_latency": 0,
-                        "p95_latency": 0,
-                        "avg_uptime": 0,
-                        "breaches": 0
-                    }
-            
-            # Send response
-            self.wfile.write(json.dumps(response).encode())
-            
-        except Exception as e:
-            error_response = {"error": str(e)}
-            self.wfile.write(json.dumps(error_response).encode())
+        else:
+            request_data = body
+        
+        regions = request_data.get('regions', [])
+        threshold_ms = request_data.get('threshold_ms', 180)
+        
+        # Calculate metrics for each region
+        response = {}
+        for region in regions:
+            if region in TELEMETRY_DATA:
+                response[region] = analyze_region(
+                    TELEMETRY_DATA[region], 
+                    threshold_ms
+                )
+            else:
+                response[region] = {
+                    "avg_latency": 0,
+                    "p95_latency": 0,
+                    "avg_uptime": 0,
+                    "breaches": 0
+                }
+        
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+            },
+            'body': json.dumps(response)
+        }
+        
+    except Exception as e:
+        return {
+            'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+            },
+            'body': json.dumps({'error': str(e)})
+        }
